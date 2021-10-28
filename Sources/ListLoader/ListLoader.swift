@@ -16,7 +16,7 @@ public protocol ListLoader: AnyObject {
     var itemsQueue: DispatchQueue { get }
 
     func getNewItems(using credentials: Paginator.Credentials, completion: @escaping (Swift.Result<[ItemsList.Element], Error>) -> Void)
-    func pushNewItems(_ inItems: [ItemsList.Element], range: Range<Int>?, completion: @escaping (Error?) -> Void)
+    func pushNewItems(_ inItems: [ItemsList.Element], range: Range<Int>?, completion: @escaping (Swift.Result<[ItemsList.Element], Error>) -> Void)
 
     /// Notification listeners.
     var listener: PullsListener? { get }
@@ -72,13 +72,13 @@ private extension ListLoader {
         return buf ?? Result.failure(PullError.queueError)
     }
 
-    func push(_ arr: [ItemsList.Element], range: Range<Int>?) throws {
+    func push(_ arr: [ItemsList.Element], range: Range<Int>?) throws -> Result<[ItemsList.Element], Error> {
         let sem = DispatchSemaphore(value: 0)
-        var error: Error?
+        var buf: Result<[ItemsList.Element], Error>!
         itemsQueue.sync { [weak self] in
             guard let this = self else { return }
-            this.pushNewItems(arr, range: range) { (pushError) in
-                error = pushError
+            this.pushNewItems(arr, range: range) { (result) in
+                buf = result
                 sem.signal()
             }
         }
@@ -86,7 +86,7 @@ private extension ListLoader {
         if timeout != .success {
             throw PullError.opertationTimeOut
         }
-        if let e = error { throw e }
+        return buf ?? Result.failure(PullError.queueError)
     }
 }
 
@@ -119,11 +119,11 @@ public extension ListLoader {
                 let arr = try buf.get()
                 this.paginator.switch(to: page, inItemsCount: arr.count)
                 // Add new items
-                try this.push(arr, range: range)
+                let pushedItems = try this.push(arr, range: range).get()
                 // Callback on finished
-                this.onFinished(buf)
+                this.onFinished(.success(pushedItems))
                 // Completion
-                this.callBackQueue.sync { completion?(.success(arr)) }
+                this.callBackQueue.sync { completion?(.success(pushedItems)) }
             } catch {
                 self?.onFinished(.failure(error))
                 self?.callBackQueue.sync { completion?(.failure(error)) }
